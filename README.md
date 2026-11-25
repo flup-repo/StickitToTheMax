@@ -2,6 +2,8 @@
 
 Lightweight native macOS app for pinning to-do stickies directly to your desktop wallpaper.
 
+![StickitToTheMax stickies pinned to macOS wallpaper](assets/hero.jpg)
+
 ## Why Swift + AppKit?
 
 - **Minimal memory & CPU**: Pure native AppKit with zero third-party dependencies, no Electron/WebView overhead (~15–25 MB RAM, ~0% idle CPU).
