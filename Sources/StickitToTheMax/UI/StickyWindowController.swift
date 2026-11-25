@@ -8,7 +8,9 @@ enum StickyGeometry {
         deltaX: CGFloat,
         deltaY: CGFloat,
         minSize: NSSize = StickyNote.minSize,
-        maxSize: NSSize = StickyNote.maxSize
+        maxSize: NSSize = StickyNote.maxSize,
+        imageAspectRatio: CGFloat? = nil,
+        chromeHeight: CGFloat = StickyContentView.chromeHeight
     ) -> NSRect {
         var newX = initial.origin.x
         var newY = initial.origin.y
@@ -18,7 +20,13 @@ enum StickyGeometry {
         switch edge {
         case .bottomRight:
             newWidth = clamp(initial.width + deltaX, min: minSize.width, max: maxSize.width)
-            newHeight = clamp(initial.height + deltaY, min: minSize.height, max: maxSize.height)
+            if let aspect = imageAspectRatio, aspect > 0.05 {
+                let idealHeight = (newWidth / aspect) + chromeHeight
+                newHeight = clamp(idealHeight, min: minSize.height, max: maxSize.height)
+                newWidth = clamp((newHeight - chromeHeight) * aspect, min: minSize.width, max: maxSize.width)
+            } else {
+                newHeight = clamp(initial.height + deltaY, min: minSize.height, max: maxSize.height)
+            }
             newY = initial.maxY - newHeight
 
         case .right:
@@ -34,12 +42,41 @@ enum StickyGeometry {
 
         case .bottomLeft:
             newWidth = clamp(initial.width - deltaX, min: minSize.width, max: maxSize.width)
-            newHeight = clamp(initial.height + deltaY, min: minSize.height, max: maxSize.height)
+            if let aspect = imageAspectRatio, aspect > 0.05 {
+                let idealHeight = (newWidth / aspect) + chromeHeight
+                newHeight = clamp(idealHeight, min: minSize.height, max: maxSize.height)
+                newWidth = clamp((newHeight - chromeHeight) * aspect, min: minSize.width, max: maxSize.width)
+            } else {
+                newHeight = clamp(initial.height + deltaY, min: minSize.height, max: maxSize.height)
+            }
             newX = initial.maxX - newWidth
             newY = initial.maxY - newHeight
         }
 
         return NSRect(x: newX, y: newY, width: newWidth, height: newHeight)
+    }
+
+    static func initialImageStickySize(
+        imageSize: NSSize,
+        maxDimension: CGFloat = 340,
+        chromeHeight: CGFloat = StickyContentView.chromeHeight
+    ) -> NSSize {
+        guard imageSize.width > 0, imageSize.height > 0 else {
+            return NSSize(width: CGFloat(StickyNote.defaultWidth), height: CGFloat(StickyNote.defaultHeight))
+        }
+        let aspect = imageSize.width / imageSize.height
+        let bodyW: CGFloat
+        let bodyH: CGFloat
+        if aspect >= 1 {
+            bodyW = min(max(imageSize.width, StickyNote.minSize.width), maxDimension)
+            bodyH = bodyW / aspect
+        } else {
+            bodyH = min(max(imageSize.height, StickyNote.minSize.height - chromeHeight), maxDimension)
+            bodyW = bodyH * aspect
+        }
+        let totalW = clamp(bodyW, min: StickyNote.minSize.width, max: StickyNote.maxSize.width)
+        let totalH = clamp(bodyH + chromeHeight, min: StickyNote.minSize.height, max: StickyNote.maxSize.height)
+        return NSSize(width: round(totalW), height: round(totalH))
     }
 
     private static func clamp(_ value: CGFloat, min minValue: CGFloat, max maxValue: CGFloat) -> CGFloat {
@@ -66,13 +103,19 @@ protocol StickyWindowControllerDelegate: AnyObject {
 
 final class StickyWindowController: NSWindowController, NSWindowDelegate, StickyContentViewDelegate {
     private(set) var note: StickyNote
+    let imageAspectRatio: CGFloat?
     weak var delegate: StickyWindowControllerDelegate?
 
     private let stickyContentView: StickyContentView
     private var isProgrammaticFrameChange = false
 
-    init(note: StickyNote) {
+    init(note: StickyNote, image: NSImage? = nil) {
         self.note = note
+        if let image, image.size.width > 0, image.size.height > 0 {
+            self.imageAspectRatio = image.size.width / image.size.height
+        } else {
+            self.imageAspectRatio = nil
+        }
         let window = StickyWindow(contentRect: note.frame.nsRect)
         self.stickyContentView = StickyContentView(frame: NSRect(origin: .zero, size: note.frame.nsRect.size))
         super.init(window: window)
@@ -80,6 +123,7 @@ final class StickyWindowController: NSWindowController, NSWindowDelegate, Sticky
         window.contentView = stickyContentView
         window.delegate = self
         stickyContentView.delegate = self
+        stickyContentView.setImage(image)
         stickyContentView.apply(note: note)
 
         window.onFontSizeIncrease = { [weak self] in

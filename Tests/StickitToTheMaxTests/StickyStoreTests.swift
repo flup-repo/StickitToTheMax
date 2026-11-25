@@ -145,4 +145,77 @@ final class StickyStoreTests: XCTestCase {
         XCTAssertEqual(shrunk.origin.y, initial.origin.y)
         XCTAssertEqual(shrunk.height, initial.height)
     }
+
+    func testDrawingStoreSaveLoadAndClamping() {
+        let fileURL = tempDir.appendingPathComponent("drawings.json")
+        let store = DrawingStore(fileURL: fileURL)
+
+        XCTAssertTrue(store.load().isEmpty)
+
+        let stroke = DrawingStroke(
+            points: [DrawingPoint(x: 10, y: 20), DrawingPoint(x: 110, y: 120)],
+            color: .pink,
+            lineWidth: 99.0
+        )
+        XCTAssertEqual(stroke.lineWidth, DrawingStroke.maxLineWidth)
+
+        store.saveImmediately([stroke])
+        let loaded = store.load()
+        XCTAssertEqual(loaded.count, 1)
+        XCTAssertEqual(loaded[0], stroke)
+    }
+
+    func testDrawingStrokeHitTestingForEraser() {
+        let stroke = DrawingStroke(
+            points: [DrawingPoint(x: 0, y: 0), DrawingPoint(x: 100, y: 0)],
+            color: .yellow,
+            lineWidth: 4.0
+        )
+        XCTAssertTrue(stroke.intersects(point: NSPoint(x: 50, y: 6), radius: 10))
+        XCTAssertFalse(stroke.intersects(point: NSPoint(x: 50, y: 30), radius: 10))
+        XCTAssertFalse(stroke.intersects(point: NSPoint(x: 130, y: 0), radius: 10))
+    }
+
+    func testPictureStickyPersistenceAndImageFileLifecycle() throws {
+        let fileURL = tempDir.appendingPathComponent("stickies.json")
+        let store = StickyStore(fileURL: fileURL)
+
+        let fakePNG = Data([0x89, 0x50, 0x4E, 0x47])
+        let filename = try store.saveImageData(fakePNG, fileExtension: "png")
+        let savedImageURL = store.imageURL(for: filename)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: savedImageURL.path))
+
+        let note = StickyNote(
+            title: "Photo",
+            imageFilename: filename,
+            frame: StickyFrame(x: 50, y: 60, width: 320, height: 240)
+        )
+        XCTAssertTrue(note.isImageSticky)
+        store.saveImmediately([note])
+
+        let loaded = store.load()
+        XCTAssertEqual(loaded?.count, 1)
+        XCTAssertEqual(loaded?[0].imageFilename, filename)
+        XCTAssertTrue(loaded?[0].isImageSticky == true)
+
+        store.deleteImage(filename: filename)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: savedImageURL.path))
+    }
+
+    func testPictureStickyCornerResizePreservesAspectRatio() {
+        let chrome: CGFloat = 45
+        // 2:1 landscape image: 300w x 150h body => 300 x 195 window
+        let initial = NSRect(x: 100, y: 200, width: 300, height: 195)
+        let resized = StickyGeometry.resizedRect(
+            from: initial,
+            edge: .bottomRight,
+            deltaX: 100,
+            deltaY: 0,
+            imageAspectRatio: 2.0,
+            chromeHeight: chrome
+        )
+        XCTAssertEqual(resized.width, 400, accuracy: 0.5)
+        XCTAssertEqual(resized.height, 200 + chrome, accuracy: 0.5)
+        XCTAssertEqual(resized.maxY, initial.maxY, accuracy: 0.5)
+    }
 }
