@@ -1,6 +1,7 @@
 import AppKit
+import ServiceManagement
 
-final class AppDelegate: NSObject, NSApplicationDelegate, StickyWindowControllerDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, StickyWindowControllerDelegate {
     private let store: StickyStore
     private var statusItem: NSStatusItem?
     private var controllers: [UUID: StickyWindowController] = [:]
@@ -70,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StickyWindowController
 
     private func rebuildStatusMenu() {
         let menu = NSMenu()
+        menu.delegate = self
 
         let header = NSMenuItem(title: "StickitToTheMax", action: nil, keyEquivalent: "")
         header.isEnabled = false
@@ -132,6 +134,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StickyWindowController
         toggleVisibilityItem.target = self
         menu.addItem(toggleVisibilityItem)
 
+        let loginStatus = SMAppService.mainApp.status
+        let loginTitle = loginStatus == .requiresApproval
+            ? "Launch at Login (Approve in Settings…)"
+            : "Launch at Login"
+        let launchAtLoginItem = NSMenuItem(
+            title: loginTitle,
+            action: #selector(handleToggleLaunchAtLogin),
+            keyEquivalent: ""
+        )
+        launchAtLoginItem.target = self
+        launchAtLoginItem.state = (loginStatus == .enabled) ? .on : .off
+        menu.addItem(launchAtLoginItem)
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit StickitToTheMax", action: #selector(handleQuit), keyEquivalent: "q")
@@ -139,6 +154,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StickyWindowController
         menu.addItem(quitItem)
 
         statusItem?.menu = menu
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        let loginStatus = SMAppService.mainApp.status
+        if let item = menu.items.first(where: { $0.action == #selector(handleToggleLaunchAtLogin) }) {
+            item.title = loginStatus == .requiresApproval
+                ? "Launch at Login (Approve in Settings…)"
+                : "Launch at Login"
+            item.state = (loginStatus == .enabled) ? .on : .off
+        }
     }
 
     // MARK: - Selection Management
@@ -408,6 +433,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StickyWindowController
                 controller.showOnDesktop(focus: false)
             } else {
                 controller.window?.orderOut(nil)
+            }
+        }
+        rebuildStatusMenu()
+    }
+
+    @objc private func handleToggleLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            switch service.status {
+            case .enabled:
+                try service.unregister()
+            case .requiresApproval:
+                SMAppService.openSystemSettingsLoginItems()
+            case .notRegistered, .notFound:
+                try service.register()
+            @unknown default:
+                try service.register()
+            }
+        } catch {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "Could not update Launch at Login"
+            alert.informativeText = "\(error.localizedDescription)\n\nMake sure you are running StickitToTheMax.app (ideally from /Applications)."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Open Login Items")
+            alert.addButton(withTitle: "OK")
+            if alert.runModal() == .alertFirstButtonReturn {
+                SMAppService.openSystemSettingsLoginItems()
             }
         }
         rebuildStatusMenu()
