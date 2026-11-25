@@ -29,6 +29,37 @@ public final class StickyStore {
         self.decoder = decoder
     }
 
+    public var imagesDirectoryURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("images", isDirectory: true)
+    }
+
+    public func imageURL(for filename: String) -> URL {
+        imagesDirectoryURL.appendingPathComponent(filename)
+    }
+
+    public func importImage(from sourceURL: URL) throws -> String {
+        try FileManager.default.createDirectory(at: imagesDirectoryURL, withIntermediateDirectories: true)
+        let ext = sourceURL.pathExtension.isEmpty ? "png" : sourceURL.pathExtension.lowercased()
+        let filename = "\(UUID().uuidString).\(ext)"
+        let destination = imagesDirectoryURL.appendingPathComponent(filename)
+        try FileManager.default.copyItem(at: sourceURL, to: destination)
+        return filename
+    }
+
+    public func saveImageData(_ data: Data, fileExtension: String = "png") throws -> String {
+        try FileManager.default.createDirectory(at: imagesDirectoryURL, withIntermediateDirectories: true)
+        let filename = "\(UUID().uuidString).\(fileExtension)"
+        let destination = imagesDirectoryURL.appendingPathComponent(filename)
+        try data.write(to: destination, options: [.atomic])
+        return filename
+    }
+
+    public func deleteImage(filename: String?) {
+        guard let filename else { return }
+        let url = imagesDirectoryURL.appendingPathComponent(filename)
+        try? FileManager.default.removeItem(at: url)
+    }
+
     public func load() -> [StickyNote]? {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return nil

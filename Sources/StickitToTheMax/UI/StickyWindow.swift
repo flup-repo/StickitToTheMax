@@ -34,6 +34,8 @@ final class StickyWindow: NSWindow {
         self.maxSize = StickyNote.maxSize
         self.isMovableByWindowBackground = false
         self.tabbingMode = .disallowed
+        // Stickies always use light pastel surfaces, so use aqua appearance for crisp dark text/cursors
+        self.appearance = NSAppearance(named: .aqua)
     }
 
     override var canBecomeKey: Bool { true }

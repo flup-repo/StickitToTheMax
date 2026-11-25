@@ -90,9 +90,14 @@ public struct StickyNote: Codable, Equatable, Identifiable, Sendable {
     public var color: StickyColor
     public var isDone: Bool
     public var fontSize: Double
+    public var imageFilename: String?
     public var frame: StickyFrame
     public var createdAt: Date
     public var updatedAt: Date
+
+    public var isImageSticky: Bool {
+        imageFilename != nil
+    }
 
     public static let defaultWidth: Double = 260
     public static let defaultHeight: Double = 220
@@ -101,7 +106,7 @@ public struct StickyNote: Codable, Equatable, Identifiable, Sendable {
     public static let maxFontSize: Double = 32.0
     public static let fontSizeStep: Double = 2.0
     public static let minSize = NSSize(width: 190, height: 140)
-    public static let maxSize = NSSize(width: 720, height: 720)
+    public static let maxSize = NSSize(width: 1200, height: 1200)
 
     public init(
         id: UUID = UUID(),
@@ -110,6 +115,7 @@ public struct StickyNote: Codable, Equatable, Identifiable, Sendable {
         color: StickyColor = .yellow,
         isDone: Bool = false,
         fontSize: Double = StickyNote.defaultFontSize,
+        imageFilename: String? = nil,
         frame: StickyFrame,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -120,6 +126,7 @@ public struct StickyNote: Codable, Equatable, Identifiable, Sendable {
         self.color = color
         self.isDone = isDone
         self.fontSize = Self.clampedFontSize(fontSize)
+        self.imageFilename = imageFilename
         self.frame = frame
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -130,7 +137,7 @@ public struct StickyNote: Codable, Equatable, Identifiable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, body, color, isDone, fontSize, frame, createdAt, updatedAt
+        case id, title, body, color, isDone, fontSize, imageFilename, frame, createdAt, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -142,6 +149,7 @@ public struct StickyNote: Codable, Equatable, Identifiable, Sendable {
         isDone = try container.decode(Bool.self, forKey: .isDone)
         let decodedFontSize = try container.decodeIfPresent(Double.self, forKey: .fontSize) ?? Self.defaultFontSize
         fontSize = Self.clampedFontSize(decodedFontSize)
+        imageFilename = try container.decodeIfPresent(String.self, forKey: .imageFilename)
         frame = try container.decode(StickyFrame.self, forKey: .frame)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)

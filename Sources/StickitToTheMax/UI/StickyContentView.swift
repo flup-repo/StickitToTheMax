@@ -375,7 +375,16 @@ private final class ResizeEdgeHitView: NSView {
     }
 }
 
+/// Image view whose intrinsicContentSize does not lock window resizing to the image's pixel dimensions.
+private final class StickyImageView: NSImageView {
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+}
+
 final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
+    static let chromeHeight: CGFloat = 45
+
     weak var delegate: StickyContentViewDelegate?
 
     private let dragHandleBar = DragHandleBarView()
@@ -388,6 +397,10 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     private let separatorView = NSView()
     private let scrollView = NSScrollView()
     private let textView = NSTextView()
+    private let imageView = StickyImageView()
+
+    private var doneButtonWidthConstraint: NSLayoutConstraint?
+    private var titleLeadingConstraint: NSLayoutConstraint?
 
     private let resizeCorner = ResizeCornerView()
     private let rightEdgeHit = ResizeEdgeHitView(edge: .right)
@@ -397,6 +410,7 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
 
     private var currentColor: StickyColor = .yellow
     private var isDone: Bool = false
+    private var isImageSticky: Bool = false
     private var isSelected: Bool = false
     private var currentFontSize: Double = StickyNote.defaultFontSize
     private var isUpdatingProgrammatically = false
@@ -434,16 +448,27 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
 
         currentColor = note.color
         isDone = note.isDone
+        isImageSticky = note.isImageSticky
         currentFontSize = note.fontSize
 
         if titleField.stringValue != note.title {
             titleField.stringValue = note.title
         }
-        if textView.string != note.body {
+        if !isImageSticky && textView.string != note.body {
             textView.string = note.body
         }
 
+        scrollView.isHidden = isImageSticky
+        imageView.isHidden = !isImageSticky
+        doneButton.isHidden = isImageSticky
+        doneButtonWidthConstraint?.constant = isImageSticky ? 0 : 20
+        titleLeadingConstraint?.constant = isImageSticky ? 2 : 6
+
         refreshAppearance()
+    }
+
+    func setImage(_ image: NSImage?) {
+        imageView.image = image
     }
 
     func setSelected(_ selected: Bool) {
@@ -567,6 +592,18 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
 
         scrollView.documentView = textView
         addSubview(scrollView)
+
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
+        imageView.isHidden = true
+        imageView.wantsLayer = true
+        imageView.layer?.backgroundColor = NSColor(calibratedWhite: 0.08, alpha: 0.92).cgColor
+        imageView.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        imageView.setContentCompressionResistancePriority(.init(1), for: .vertical)
+        imageView.setContentHuggingPriority(.init(1), for: .horizontal)
+        imageView.setContentHuggingPriority(.init(1), for: .vertical)
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(imageView)
     }
 
     private func setupResizeHandles() {
@@ -602,6 +639,11 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         let edgeThickness: CGFloat = 8
         let cornerSize: CGFloat = 24
 
+        let doneWidth = doneButton.widthAnchor.constraint(equalToConstant: 20)
+        doneButtonWidthConstraint = doneWidth
+        let titleLead = titleField.leadingAnchor.constraint(equalTo: doneButton.trailingAnchor, constant: 6)
+        titleLeadingConstraint = titleLead
+
         NSLayoutConstraint.activate([
             dragHandleBar.topAnchor.constraint(equalTo: topAnchor),
             dragHandleBar.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -615,10 +657,10 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
 
             doneButton.leadingAnchor.constraint(equalTo: headerView.leadingAnchor, constant: 8),
             doneButton.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
-            doneButton.widthAnchor.constraint(equalToConstant: 20),
+            doneWidth,
             doneButton.heightAnchor.constraint(equalToConstant: 20),
 
-            titleField.leadingAnchor.constraint(equalTo: doneButton.trailingAnchor, constant: 6),
+            titleLead,
             titleField.trailingAnchor.constraint(equalTo: colorButton.leadingAnchor, constant: -6),
             titleField.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
 
@@ -646,6 +688,11 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            imageView.topAnchor.constraint(equalTo: separatorView.bottomAnchor),
+            imageView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            imageView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             // Generous invisible resize hit zones along left, right, bottom edges
             rightEdgeHit.topAnchor.constraint(equalTo: separatorView.bottomAnchor),
@@ -737,11 +784,13 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
             attrs[.strikethroughColor] = inkColor
         }
+        titleField.font = titleFont
+        titleField.textColor = inkColor
         if window?.firstResponder != titleField.currentEditor() {
             titleField.attributedStringValue = NSAttributedString(string: titleText, attributes: attrs)
-        } else {
-            titleField.font = titleFont
-            titleField.textColor = inkColor
+        } else if let editor = titleField.currentEditor() as? NSTextView {
+            editor.textColor = inkColor
+            editor.insertionPointColor = inkColor
         }
     }
 
