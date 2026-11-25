@@ -41,20 +41,23 @@
       <div class="hero-copy">
         <div class="pill-badge">
           <span class="dot"></span>
-          Native macOS 13+ &middot; Pure Swift &amp; AppKit &middot; ~288 KB
+          v1.0.0 &middot; Native macOS 13+ &middot; Pure Swift &amp; AppKit
         </div>
         <h1>Stickies that actually<br /><span class="accent-text">stick to your wallpaper.</span></h1>
         <p class="hero-sub">
           Pin color-coded to-do stickies, resizable pictures, and freehand drawings strictly to the macOS desktop layer—always behind your open apps, always there when you show your desktop, and light enough to forget it’s running.
         </p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="#install">Get Started</a>
+          <a class="btn btn-primary" href="https://github.com/flup-repo/StickitToTheMax/releases/download/v1.0.0/StickitToTheMax-1.0.0.dmg">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download v1.0.0 (.dmg)
+          </a>
           <a class="btn btn-secondary" href="#demo">Try Interactive Demo</a>
         </div>
         <div class="hero-stats">
           <div class="stat">
-            <span class="stat-value">288 KB</span>
-            <span class="stat-label">Release binary</span>
+            <span class="stat-value">391 KB</span>
+            <span class="stat-label">DMG installer</span>
           </div>
           <div class="stat-divider"></div>
           <div class="stat">
@@ -304,25 +307,69 @@
 
     <!-- Install -->
     <section id="install" class="section container">
-      <div class="install-box">
-        <div class="install-copy">
-          <span class="eyebrow">Open Source &middot; MIT</span>
-          <h2>Build &amp; run in seconds</h2>
-          <p>Requires macOS 13+ and Swift / Xcode Command Line Tools. Compiles a self-contained <code>StickitToTheMax.app</code> bundle with zero external dependencies.</p>
-          <p class="install-tip">Tip: Copy <code>build/StickitToTheMax.app</code> to <code>/Applications</code> and toggle <strong>Launch at Login</strong> in the menu bar.</p>
-        </div>
-        <div class="code-card">
-          <div class="code-header">
-            <span>Terminal</span>
-            <button type="button" class="copy-btn" id="copy-install-btn">Copy</button>
+      <div class="download-box">
+        <div class="download-main">
+          <span class="eyebrow">Release v1.0.0 &middot; Free &amp; Open Source</span>
+          <h2>Download for macOS</h2>
+          <p>Install in seconds with the ready-to-use DMG—no Xcode, no Terminal required. Requires macOS 13.0 or later.</p>
+          <div class="download-actions">
+            <a class="btn btn-primary" href="https://github.com/flup-repo/StickitToTheMax/releases/download/v1.0.0/StickitToTheMax-1.0.0.dmg">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Download StickitToTheMax-1.0.0.dmg
+            </a>
+            <a class="btn btn-ghost" href="https://github.com/flup-repo/StickitToTheMax/releases/tag/v1.0.0" target="_blank" rel="noopener">
+              Release Notes
+            </a>
           </div>
-          <pre><code id="install-code">git clone https://github.com/flup-repo/StickitToTheMax.git
-cd StickitToTheMax
-./scripts/bundle.sh
-cp -R build/StickitToTheMax.app /Applications/
-open /Applications/StickitToTheMax.app</code></pre>
+          <p class="install-tip">First launch note: if macOS Gatekeeper prompts you, right-click <strong>StickitToTheMax.app</strong> &rarr; <strong>Open</strong> (or run <code>xattr -cr /Applications/StickitToTheMax.app</code>).</p>
         </div>
+
+        <ol class="install-steps">
+          <li>
+            <span class="step-num">1</span>
+            <div>
+              <strong>Download the DMG</strong>
+              <p>Grab the 391 KB <code>StickitToTheMax-1.0.0.dmg</code> installer above.</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">2</span>
+            <div>
+              <strong>Drag to Applications</strong>
+              <p>Open the DMG and drop <strong>StickitToTheMax.app</strong> into your <strong>Applications</strong> folder.</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num">3</span>
+            <div>
+              <strong>Pin &amp; Start at Login</strong>
+              <p>Launch the app, click the menu bar note icon, and toggle <strong>Launch at Login</strong>.</p>
+            </div>
+          </li>
+        </ol>
       </div>
+
+      <details class="dev-build-details">
+        <summary>
+          <span>Build from source (for developers)</span>
+          <span class="muted">Swift 6 / Xcode Command Line Tools</span>
+        </summary>
+        <div class="install-box dev-build-body">
+          <div class="install-copy">
+            <p>Clone the repository and compile a self-contained <code>StickitToTheMax.app</code> bundle or <code>.dmg</code> locally with zero external dependencies.</p>
+          </div>
+          <div class="code-card">
+            <div class="code-header">
+              <span>Terminal</span>
+              <button type="button" class="copy-btn" id="copy-install-btn">Copy</button>
+            </div>
+            <pre><code id="install-code">git clone https://github.com/flup-repo/StickitToTheMax.git
+cd StickitToTheMax
+./scripts/create-dmg.sh
+open build/StickitToTheMax-1.0.0.dmg</code></pre>
+          </div>
+        </div>
+      </details>
     </section>
   </main>
 
