@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
     private var marqueeAnchor: NSPoint?
     private var marqueeBaseSelection: Set<UUID> = []
     private var globalMouseMonitor: Any?
+    private var localMouseUpMonitor: Any?
 
     override init() {
         self.store = StickyStore()
@@ -33,6 +34,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
         if let globalMouseMonitor {
             NSEvent.removeMonitor(globalMouseMonitor)
             self.globalMouseMonitor = nil
+        }
+        if let localMouseUpMonitor {
+            NSEvent.removeMonitor(localMouseUpMonitor)
+            self.localMouseUpMonitor = nil
         }
         store.saveImmediately(notes)
     }
@@ -193,9 +198,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
         globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
         ) { [weak self] event in
-            DispatchQueue.main.async {
+            if Thread.isMainThread {
                 self?.handleGlobalMouseEvent(event)
+            } else {
+                DispatchQueue.main.async {
+                    self?.handleGlobalMouseEvent(event)
+                }
             }
+        }
+
+        localMouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] event in
+            self?.finishMarqueeIfActive()
+            return event
+        }
+    }
+
+    private func finishMarqueeIfActive() {
+        if marqueeAnchor != nil {
+            marqueeAnchor = nil
+            marqueeBaseSelection = []
+            marqueeOverlay.hide()
         }
     }
 
@@ -210,7 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
                 controller.window?.frame.contains(location) == true
             }
             if isOverSticky || DesktopHitTest.isPointOverNormalWindow(location) {
-                marqueeAnchor = nil
+                finishMarqueeIfActive()
                 return
             }
 
@@ -224,6 +246,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
 
         case .leftMouseDragged:
             guard let anchor = marqueeAnchor else { return }
+            if (NSEvent.pressedMouseButtons & 1) == 0 {
+                finishMarqueeIfActive()
+                return
+            }
+
             let dx = abs(location.x - anchor.x)
             let dy = abs(location.y - anchor.y)
             guard dx > 4 || dy > 4 else { return }
@@ -245,11 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
             updateSelection(hitIDs)
 
         case .leftMouseUp:
-            if marqueeAnchor != nil {
-                marqueeAnchor = nil
-                marqueeBaseSelection = []
-                marqueeOverlay.hide()
-            }
+            finishMarqueeIfActive()
 
         default:
             break

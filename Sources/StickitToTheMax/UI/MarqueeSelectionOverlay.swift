@@ -77,44 +77,29 @@ private final class MarqueeSelectionView: NSView {
 /// rather than over a normal application window.
 enum DesktopHitTest {
     static func isPointOverNormalWindow(_ appKitPoint: NSPoint) -> Bool {
-        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return false }
-        // CGWindow bounds use top-left origin relative to the primary screen.
-        let cgPoint = CGPoint(x: appKitPoint.x, y: primaryHeight - appKitPoint.y)
+        // Ask WindowServer which window is actually hit-testable at this point.
+        // Unlike scanning all CGWindowBounds, this respects Show Desktop, Mission Control,
+        // Stage Manager, multi-monitor coordinates, and click-through overlay windows.
+        let topWindowNumber = NSWindow.windowNumber(at: appKitPoint, belowWindowWithWindowNumber: 0)
+        guard topWindowNumber > 0 else {
+            return false
+        }
 
         guard let infoList = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements],
-            kCGNullWindowID
-        ) as? [[String: Any]] else {
+            [.optionIncludingWindow],
+            CGWindowID(topWindowNumber)
+        ) as? [[String: Any]],
+              let info = infoList.first else {
             return false
         }
 
         let ownPID = ProcessInfo.processInfo.processIdentifier
-
-        for info in infoList {
-            if let pid = info[kCGWindowOwnerPID as String] as? Int32, pid == ownPID {
-                continue
-            }
-            let layer = info[kCGWindowLayer as String] as? Int ?? 0
-            // Ignore desktop/wallpaper layers (< 0)
-            if layer < 0 { continue }
-
-            let alpha = info[kCGWindowAlpha as String] as? Double ?? 1.0
-            if alpha <= 0.01 { continue }
-
-            guard let boundsDict = info[kCGWindowBounds as String] as? [String: CGFloat],
-                  let x = boundsDict["X"],
-                  let y = boundsDict["Y"],
-                  let w = boundsDict["Width"],
-                  let h = boundsDict["Height"],
-                  w > 0, h > 0 else {
-                continue
-            }
-
-            let rect = CGRect(x: x, y: y, width: w, height: h)
-            if rect.contains(cgPoint) {
-                return true
-            }
+        if let pid = info[kCGWindowOwnerPID as String] as? Int32, pid == ownPID {
+            return false
         }
-        return false
+
+        let layer = info[kCGWindowLayer as String] as? Int ?? 0
+        // Desktop / wallpaper / desktop-icon layers are strictly below 0
+        return layer >= 0
     }
 }
