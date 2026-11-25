@@ -125,4 +125,24 @@ final class StickyStoreTests: XCTestCase {
         XCTAssertEqual(loaded?.count, 1)
         XCTAssertEqual(loaded?[0].fontSize, StickyNote.defaultFontSize)
     }
+
+    func testStickyGeometryBottomRightResizeAnchorsTopLeft() {
+        let initial = NSRect(x: 100, y: 200, width: 260, height: 220)
+        let resized = StickyGeometry.resizedRect(from: initial, edge: .bottomRight, deltaX: 40, deltaY: 30)
+
+        XCTAssertEqual(resized.origin.x, 100)
+        XCTAssertEqual(resized.maxY, initial.maxY)
+        XCTAssertEqual(resized.width, 300)
+        XCTAssertEqual(resized.height, 250)
+    }
+
+    func testStickyGeometryLeftEdgeResizeAnchorsRightEdgeAndClamps() {
+        let initial = NSRect(x: 100, y: 200, width: 260, height: 220)
+        let shrunk = StickyGeometry.resizedRect(from: initial, edge: .left, deltaX: 500, deltaY: 0)
+
+        XCTAssertEqual(shrunk.width, StickyNote.minSize.width)
+        XCTAssertEqual(shrunk.maxX, initial.maxX)
+        XCTAssertEqual(shrunk.origin.y, initial.origin.y)
+        XCTAssertEqual(shrunk.height, initial.height)
+    }
 }

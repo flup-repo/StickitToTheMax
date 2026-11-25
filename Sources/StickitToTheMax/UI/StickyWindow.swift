@@ -8,6 +8,13 @@ final class StickyWindow: NSWindow {
         NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
     }
 
+    var onFontSizeIncrease: (() -> Void)?
+    var onFontSizeDecrease: (() -> Void)?
+    var onFontSizeReset: (() -> Void)?
+    var onCommandClick: (() -> Void)?
+    var onPlainClick: (() -> Void)?
+    var onEscapeKey: (() -> Void)?
+
     init(contentRect: NSRect) {
         super.init(
             contentRect: contentRect,
@@ -29,12 +36,23 @@ final class StickyWindow: NSWindow {
         self.tabbingMode = .disallowed
     }
 
-    var onFontSizeIncrease: (() -> Void)?
-    var onFontSizeDecrease: (() -> Void)?
-    var onFontSizeReset: (() -> Void)?
-
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown {
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if flags.contains(.command), !flags.contains(.option), !flags.contains(.control) {
+                onCommandClick?()
+                return
+            } else {
+                onPlainClick?()
+            }
+        } else if event.type == .keyDown, event.keyCode == 53 {
+            onEscapeKey?()
+        }
+        super.sendEvent(event)
+    }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)

@@ -7,6 +7,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StickyWindowController
     private var notes: [StickyNote] = []
     private var stickiesVisible = true
 
+    // Multi-selection & group drag/resize state
+    private var selectedIDs: Set<UUID> = []
+    private var activeGroupFrames: [UUID: NSRect] = [:]
+    private let marqueeOverlay = MarqueeSelectionOverlay()
+    private var marqueeAnchor: NSPoint?
+    private var marqueeBaseSelection: Set<UUID> = []
+    private var globalMouseMonitor: Any?
+
     override init() {
         self.store = StickyStore()
         super.init()
@@ -17,9 +25,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StickyWindowController
         setupStatusItem()
         loadInitialNotes()
         observeScreenChanges()
+        installDesktopMarqueeMonitor()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let globalMouseMonitor {
+            NSEvent.removeMonitor(globalMouseMonitor)
+            self.globalMouseMonitor = nil
+        }
         store.saveImmediately(notes)
     }
 
@@ -128,6 +141,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StickyWindowController
         statusItem?.menu = menu
     }
 
+    // MARK: - Selection Management
+
+    private func updateSelection(_ newSelection: Set<UUID>) {
+        guard newSelection != selectedIDs else { return }
+        selectedIDs = newSelection
+        for (id, controller) in controllers {
+            controller.setSelected(selectedIDs.contains(id))
+        }
+    }
+
+    private func clearSelection() {
+        updateSelection([])
+    }
+
+    private func targetIDs(for initiatorID: UUID) -> [UUID] {
+        if selectedIDs.contains(initiatorID), selectedIDs.count > 1 {
+            return Array(selectedIDs)
+        }
+        return [initiatorID]
+    }
+
+    // MARK: - Desktop Marquee Selection
+
+    private func installDesktopMarqueeMonitor() {
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        ) { [weak self] event in
+            DispatchQueue.main.async {
+                self?.handleGlobalMouseEvent(event)
+            }
+        }
+    }
+
+    private func handleGlobalMouseEvent(_ event: NSEvent) {
+        guard stickiesVisible else { return }
+        let location = NSEvent.mouseLocation
+
+        switch event.type {
+        case .leftMouseDown:
+            // Ignore clicks over any sticky or over any normal app window
+            let isOverSticky = controllers.values.contains { controller in
+                controller.window?.frame.contains(location) == true
+            }
+            if isOverSticky || DesktopHitTest.isPointOverNormalWindow(location) {
+                marqueeAnchor = nil
+                return
+            }
+
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let isCommandHeld = flags.contains(.command)
+            marqueeAnchor = location
+            marqueeBaseSelection = isCommandHeld ? selectedIDs : []
+            if !isCommandHeld && !selectedIDs.isEmpty {
+                clearSelection()
+            }
+
+        case .leftMouseDragged:
+            guard let anchor = marqueeAnchor else { return }
+            let dx = abs(location.x - anchor.x)
+            let dy = abs(location.y - anchor.y)
+            guard dx > 4 || dy > 4 else { return }
+
+            let rect = NSRect(
+                x: min(anchor.x, location.x),
+                y: min(anchor.y, location.y),
+                width: dx,
+                height: dy
+            )
+            marqueeOverlay.update(screenRect: rect)
+
+            var hitIDs = marqueeBaseSelection
+            for (id, controller) in controllers {
+                if let frame = controller.window?.frame, frame.intersects(rect) {
+                    hitIDs.insert(id)
+                }
+            }
+            updateSelection(hitIDs)
+
+        case .leftMouseUp:
+            if marqueeAnchor != nil {
+                marqueeAnchor = nil
+                marqueeBaseSelection = []
+                marqueeOverlay.hide()
+            }
+
+        default:
+            break
+        }
+    }
+
     // MARK: - Loading & Lifecycle
 
     private func loadInitialNotes() {
@@ -218,12 +321,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StickyWindowController
         let note = StickyNote(title: title, body: "", color: color, frame: frame)
         notes.append(note)
         stickiesVisible = true
+        clearSelection()
         spawnController(for: note, focus: true)
         store.scheduleSave(notes)
         rebuildStatusMenu()
     }
 
     private func removeSticky(id: UUID) {
+        selectedIDs.remove(id)
         if let controller = controllers.removeValue(forKey: id) {
             controller.window?.orderOut(nil)
             controller.close()
@@ -258,7 +363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StickyWindowController
                 let clampedY = min(max(rect.origin.y, target.minY + 20), target.maxY - rect.height - 20)
                 let newRect = NSRect(x: clampedX, y: clampedY, width: rect.width, height: rect.height)
                 notes[index].frame = StickyFrame(rect: newRect)
-                controllers[notes[index].id]?.window?.setFrame(newRect, display: true)
+                controllers[notes[index].id]?.setFrameProgrammatically(newRect)
                 changed = true
             }
         }
@@ -281,6 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StickyWindowController
     @objc private func handleDeleteAllDone() {
         let doneIDs = notes.filter(\.isDone).map(\.id)
         for id in doneIDs {
+            selectedIDs.remove(id)
             if let controller = controllers.removeValue(forKey: id) {
                 controller.window?.orderOut(nil)
                 controller.close()
@@ -293,6 +399,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StickyWindowController
 
     @objc private func handleToggleVisibility() {
         stickiesVisible.toggle()
+        if !stickiesVisible {
+            clearSelection()
+            marqueeOverlay.hide()
+        }
         for controller in controllers.values {
             if stickiesVisible {
                 controller.showOnDesktop(focus: false)
@@ -343,6 +453,132 @@ final class AppDelegate: NSObject, NSApplicationDelegate, StickyWindowController
 
         if alert.runModal() == .alertFirstButtonReturn {
             removeSticky(id: note.id)
+        }
+    }
+
+    func stickyControllerDidCommandClick(id: UUID) {
+        var next = selectedIDs
+        if next.contains(id) {
+            next.remove(id)
+        } else {
+            next.insert(id)
+        }
+        updateSelection(next)
+    }
+
+    func stickyControllerDidPlainClick(id: UUID) {
+        if !selectedIDs.contains(id), !selectedIDs.isEmpty {
+            clearSelection()
+        }
+    }
+
+    func stickyControllerDidRequestClearSelection() {
+        clearSelection()
+    }
+
+    func stickyControllerDidBeginMove(id: UUID) {
+        let ids = targetIDs(for: id)
+        activeGroupFrames = [:]
+        for targetID in ids {
+            if let frame = controllers[targetID]?.window?.frame {
+                activeGroupFrames[targetID] = frame
+            }
+        }
+    }
+
+    func stickyControllerDidDragMove(deltaX: CGFloat, deltaY: CGFloat) {
+        for (id, startFrame) in activeGroupFrames {
+            let movedRect = NSRect(
+                x: startFrame.origin.x + deltaX,
+                y: startFrame.origin.y + deltaY,
+                width: startFrame.width,
+                height: startFrame.height
+            )
+            controllers[id]?.setFrameProgrammatically(movedRect)
+        }
+    }
+
+    func stickyControllerDidEndMove() {
+        commitActiveGroupFrames()
+    }
+
+    func stickyControllerDidBeginResize(id: UUID, edge: StickyResizeEdge) {
+        let ids = targetIDs(for: id)
+        activeGroupFrames = [:]
+        for targetID in ids {
+            if let frame = controllers[targetID]?.window?.frame {
+                activeGroupFrames[targetID] = frame
+            }
+        }
+    }
+
+    func stickyControllerDidDragResize(edge: StickyResizeEdge, deltaX: CGFloat, deltaY: CGFloat) {
+        for (id, startFrame) in activeGroupFrames {
+            let resized = StickyGeometry.resizedRect(
+                from: startFrame,
+                edge: edge,
+                deltaX: deltaX,
+                deltaY: deltaY
+            )
+            controllers[id]?.setFrameProgrammatically(resized)
+        }
+    }
+
+    func stickyControllerDidEndResize() {
+        commitActiveGroupFrames()
+    }
+
+    private func commitActiveGroupFrames() {
+        var didChange = false
+        for id in activeGroupFrames.keys {
+            if let controller = controllers[id],
+               let index = notes.firstIndex(where: { $0.id == id }) {
+                let updated = controller.commitCurrentFrameToModel()
+                if notes[index] != updated {
+                    notes[index] = updated
+                    didChange = true
+                }
+            }
+        }
+        activeGroupFrames = [:]
+        if didChange {
+            store.scheduleSave(notes)
+        }
+    }
+
+    func stickyControllerDidAdjustFontSize(id: UUID, delta: Double) {
+        let ids = targetIDs(for: id)
+        var didChange = false
+        for targetID in ids {
+            if let controller = controllers[targetID],
+               let index = notes.firstIndex(where: { $0.id == targetID }) {
+                controller.applyFontSize(controller.note.fontSize + delta)
+                if notes[index] != controller.note {
+                    notes[index] = controller.note
+                    didChange = true
+                }
+            }
+        }
+        if didChange {
+            store.scheduleSave(notes)
+        }
+    }
+
+    func stickyControllerDidResetFontSize(id: UUID) {
+        let ids = targetIDs(for: id)
+        var didChange = false
+        for targetID in ids {
+            if let controller = controllers[targetID],
+               let index = notes.firstIndex(where: { $0.id == targetID }) {
+                controller.applyFontSize(StickyNote.defaultFontSize)
+                if notes[index] != controller.note {
+                    notes[index] = controller.note
+                    didChange = true
+                }
+            }
+        }
+        if didChange {
+            store.scheduleSave(notes)
         }
     }
 }

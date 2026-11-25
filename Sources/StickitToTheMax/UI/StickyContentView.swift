@@ -1,5 +1,13 @@
 import AppKit
 
+enum StickyResizeEdge {
+    case bottomRight
+    case bottomLeft
+    case right
+    case bottom
+    case left
+}
+
 protocol StickyContentViewDelegate: AnyObject {
     func stickyViewDidChangeTitle(_ title: String)
     func stickyViewDidChangeBody(_ body: String)
@@ -7,13 +15,97 @@ protocol StickyContentViewDelegate: AnyObject {
     func stickyViewDidSelectColor(_ color: StickyColor)
     func stickyViewDidRequestNewSticky()
     func stickyViewDidRequestDelete()
+    func stickyViewDidBeginMove()
+    func stickyViewDidDragMove(deltaX: CGFloat, deltaY: CGFloat)
+    func stickyViewDidEndMove()
+    func stickyViewDidBeginResize(edge: StickyResizeEdge)
+    func stickyViewDidDragResize(edge: StickyResizeEdge, deltaX: CGFloat, deltaY: CGFloat)
+    func stickyViewDidEndResize()
+}
+
+/// Crisp custom diagonal resize cursors using standard AppKit drawing (no private APIs).
+private enum ResizeCursors {
+    static let diagonalNWSE: NSCursor = makeDiagonalCursor(nwToSE: true)
+    static let diagonalNESW: NSCursor = makeDiagonalCursor(nwToSE: false)
+
+    private static func makeDiagonalCursor(nwToSE: Bool) -> NSCursor {
+        let size: CGFloat = 18
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.lockFocus()
+
+        let transform = NSAffineTransform()
+        transform.translateX(by: size / 2, yBy: size / 2)
+        transform.rotate(byDegrees: nwToSE ? -45 : 45)
+        transform.concat()
+
+        // Double-headed horizontal arrow rotated ±45°
+        let arrow = NSBezierPath()
+        arrow.move(to: NSPoint(x: -7, y: 0))
+        arrow.line(to: NSPoint(x: -3, y: 3.5))
+        arrow.line(to: NSPoint(x: -3, y: 1.2))
+        arrow.line(to: NSPoint(x: 3, y: 1.2))
+        arrow.line(to: NSPoint(x: 3, y: 3.5))
+        arrow.line(to: NSPoint(x: 7, y: 0))
+        arrow.line(to: NSPoint(x: 3, y: -3.5))
+        arrow.line(to: NSPoint(x: 3, y: -1.2))
+        arrow.line(to: NSPoint(x: -3, y: -1.2))
+        arrow.line(to: NSPoint(x: -3, y: -3.5))
+        arrow.close()
+
+        NSColor.white.setStroke()
+        arrow.lineWidth = 2.2
+        arrow.lineJoinStyle = .round
+        arrow.stroke()
+
+        NSColor.black.setFill()
+        arrow.fill()
+
+        image.unlockFocus()
+        return NSCursor(image: image, hotSpot: NSPoint(x: size / 2, y: size / 2))
+    }
+}
+
+/// Shared drag-tracking helper for smooth group-aware window moving.
+private func runMoveDragLoop(
+    window: NSWindow,
+    onBegin: () -> Void,
+    onDrag: (CGFloat, CGFloat) -> Void,
+    onEnd: () -> Void
+) {
+    let startMouse = NSEvent.mouseLocation
+    onBegin()
+    NSCursor.closedHand.push()
+    defer {
+        NSCursor.pop()
+        onEnd()
+    }
+
+    while let nextEvent = window.nextEvent(
+        matching: [.leftMouseDragged, .leftMouseUp],
+        until: .distantFuture,
+        inMode: .eventTracking,
+        dequeue: true
+    ) {
+        switch nextEvent.type {
+        case .leftMouseDragged:
+            let current = NSEvent.mouseLocation
+            onDrag(current.x - startMouse.x, current.y - startMouse.y)
+        case .leftMouseUp:
+            return
+        default:
+            break
+        }
+    }
 }
 
 /// Dedicated top grab bar with a centered macOS-style pill indicator and open-hand cursor.
 private final class DragHandleBarView: NSView {
-    var pillColor: NSColor = NSColor(calibratedWhite: 0.2, alpha: 0.28) {
+    var pillColor: NSColor = NSColor(calibratedWhite: 0.2, alpha: 0.35) {
         didSet { needsDisplay = true }
     }
+    var onBeginMove: (() -> Void)?
+    var onDragMove: ((CGFloat, CGFloat) -> Void)?
+    var onEndMove: (() -> Void)?
 
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .openHand)
@@ -21,7 +113,7 @@ private final class DragHandleBarView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        let pillWidth: CGFloat = 36
+        let pillWidth: CGFloat = 38
         let pillHeight: CGFloat = 3.5
         let pillRect = NSRect(
             x: (bounds.width - pillWidth) / 2,
@@ -34,29 +126,44 @@ private final class DragHandleBarView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        NSCursor.closedHand.push()
-        window?.performDrag(with: event)
-        NSCursor.pop()
+        guard let window else { return }
+        runMoveDragLoop(
+            window: window,
+            onBegin: { self.onBeginMove?() },
+            onDrag: { dx, dy in self.onDragMove?(dx, dy) },
+            onEnd: { self.onEndMove?() }
+        )
     }
 }
 
-/// Header strip that initiates native window dragging when dragged outside interactive controls.
+/// Header strip that initiates group-aware window dragging when dragged outside interactive controls.
 private final class DraggableHeaderView: NSView {
+    var onBeginMove: (() -> Void)?
+    var onDragMove: ((CGFloat, CGFloat) -> Void)?
+    var onEndMove: (() -> Void)?
+
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .openHand)
     }
 
     override func mouseDown(with event: NSEvent) {
-        NSCursor.closedHand.push()
-        window?.performDrag(with: event)
-        NSCursor.pop()
+        guard let window else { return }
+        runMoveDragLoop(
+            window: window,
+            onBegin: { self.onBeginMove?() },
+            onDrag: { dx, dy in self.onDragMove?(dx, dy) },
+            onEnd: { self.onEndMove?() }
+        )
     }
 }
 
-/// Title field that drags the window if the user clicks & drags, and edits on a plain click.
+/// Title field that drags the sticky (or selected group) on drag, and edits on a plain click.
 private final class DraggableTitleField: NSTextField {
+    var onBeginMove: (() -> Void)?
+    var onDragMove: ((CGFloat, CGFloat) -> Void)?
+    var onEndMove: (() -> Void)?
+
     override func mouseDown(with event: NSEvent) {
-        // If already editing, let normal text selection / caret placement happen.
         if currentEditor() != nil {
             super.mouseDown(with: event)
             return
@@ -67,8 +174,10 @@ private final class DraggableTitleField: NSTextField {
             return
         }
 
-        let startLocation = event.locationInWindow
+        let startWindowLoc = event.locationInWindow
+        let startMouse = NSEvent.mouseLocation
         let dragThreshold: CGFloat = 3.0
+        var isDragging = false
 
         while let nextEvent = window.nextEvent(
             matching: [.leftMouseDragged, .leftMouseUp],
@@ -78,16 +187,24 @@ private final class DraggableTitleField: NSTextField {
         ) {
             switch nextEvent.type {
             case .leftMouseDragged:
-                let dx = nextEvent.locationInWindow.x - startLocation.x
-                let dy = nextEvent.locationInWindow.y - startLocation.y
-                if hypot(dx, dy) >= dragThreshold {
+                let dx = nextEvent.locationInWindow.x - startWindowLoc.x
+                let dy = nextEvent.locationInWindow.y - startWindowLoc.y
+                if !isDragging && hypot(dx, dy) >= dragThreshold {
+                    isDragging = true
+                    onBeginMove?()
                     NSCursor.closedHand.push()
-                    window.performDrag(with: event)
-                    NSCursor.pop()
-                    return
+                }
+                if isDragging {
+                    let current = NSEvent.mouseLocation
+                    onDragMove?(current.x - startMouse.x, current.y - startMouse.y)
                 }
             case .leftMouseUp:
-                window.makeFirstResponder(self)
+                if isDragging {
+                    NSCursor.pop()
+                    onEndMove?()
+                } else {
+                    window.makeFirstResponder(self)
+                }
                 return
             default:
                 break
@@ -96,57 +213,165 @@ private final class DraggableTitleField: NSTextField {
     }
 }
 
-/// Subtle bottom-right diagonal resize handle so users have a clear visual affordance for resizing.
-private final class ResizeGripView: NSView {
-    var lineColor: NSColor = NSColor(calibratedWhite: 0.25, alpha: 0.35) {
+/// Prominent, easy-to-grab bottom-right resize corner with hover feedback and diagonal cursor.
+private final class ResizeCornerView: NSView {
+    var gripColor: NSColor = NSColor(calibratedWhite: 0.2, alpha: 0.55) {
         didSet { needsDisplay = true }
     }
+    var badgeColor: NSColor = NSColor(calibratedWhite: 0.0, alpha: 0.06) {
+        didSet { needsDisplay = true }
+    }
+    var onBeginResize: (() -> Void)?
+    var onDragResize: ((CGFloat, CGFloat) -> Void)?
+    var onEndResize: (() -> Void)?
 
-    private var initialMouseLocation: NSPoint = .zero
-    private var initialWindowFrame: NSRect = .zero
+    private var isHovered = false
+    private var trackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        needsDisplay = true
+    }
 
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .crosshair)
+        addCursorRect(bounds, cursor: ResizeCursors.diagonalNWSE)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        lineColor.setStroke()
+
+        // Subtle corner triangle background so the resize spot is immediately visible
+        let triangle = NSBezierPath()
+        triangle.move(to: NSPoint(x: bounds.maxX, y: bounds.minY))
+        triangle.line(to: NSPoint(x: bounds.maxX, y: bounds.maxY))
+        triangle.line(to: NSPoint(x: bounds.minX, y: bounds.minY))
+        triangle.close()
+        badgeColor.withAlphaComponent(isHovered ? 0.16 : 0.08).setFill()
+        triangle.fill()
+
+        // 3 clear diagonal grip lines
+        gripColor.withAlphaComponent(isHovered ? 0.95 : 0.65).setStroke()
         let path = NSBezierPath()
-        path.lineWidth = 1.2
+        path.lineWidth = 1.6
         path.lineCapStyle = .round
 
-        let offsets: [CGFloat] = [4, 8, 12]
+        let offsets: [CGFloat] = [5, 10, 15]
         for offset in offsets {
-            path.move(to: NSPoint(x: bounds.maxX - offset, y: 3))
-            path.line(to: NSPoint(x: bounds.maxX - 3, y: offset))
+            path.move(to: NSPoint(x: bounds.maxX - offset, y: 4))
+            path.line(to: NSPoint(x: bounds.maxX - 4, y: offset))
         }
         path.stroke()
     }
 
     override func mouseDown(with event: NSEvent) {
         guard let window else { return }
-        initialMouseLocation = NSEvent.mouseLocation
-        initialWindowFrame = window.frame
+        let startMouse = NSEvent.mouseLocation
+        onBeginResize?()
+        ResizeCursors.diagonalNWSE.push()
+        defer {
+            NSCursor.pop()
+            onEndResize?()
+        }
+
+        while let nextEvent = window.nextEvent(
+            matching: [.leftMouseDragged, .leftMouseUp],
+            until: .distantFuture,
+            inMode: .eventTracking,
+            dequeue: true
+        ) {
+            switch nextEvent.type {
+            case .leftMouseDragged:
+                let current = NSEvent.mouseLocation
+                onDragResize?(current.x - startMouse.x, startMouse.y - current.y)
+            case .leftMouseUp:
+                return
+            default:
+                break
+            }
+        }
+    }
+}
+
+/// Invisible generous edge/corner hit zone for effortless resizing from edges too.
+private final class ResizeEdgeHitView: NSView {
+    let edge: StickyResizeEdge
+    var onBeginResize: ((StickyResizeEdge) -> Void)?
+    var onDragResize: ((StickyResizeEdge, CGFloat, CGFloat) -> Void)?
+    var onEndResize: (() -> Void)?
+
+    init(edge: StickyResizeEdge) {
+        self.edge = edge
+        super.init(frame: .zero)
     }
 
-    override func mouseDragged(with event: NSEvent) {
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private var resizeCursor: NSCursor {
+        switch edge {
+        case .left, .right:
+            return .resizeLeftRight
+        case .bottom:
+            return .resizeUpDown
+        case .bottomRight:
+            return ResizeCursors.diagonalNWSE
+        case .bottomLeft:
+            return ResizeCursors.diagonalNESW
+        }
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: resizeCursor)
+    }
+
+    override func mouseDown(with event: NSEvent) {
         guard let window else { return }
-        let current = NSEvent.mouseLocation
-        let deltaX = current.x - initialMouseLocation.x
-        let deltaY = initialMouseLocation.y - current.y
+        let startMouse = NSEvent.mouseLocation
+        onBeginResize?(edge)
+        resizeCursor.push()
+        defer {
+            NSCursor.pop()
+            onEndResize?()
+        }
 
-        let newWidth = min(max(initialWindowFrame.width + deltaX, window.minSize.width), window.maxSize.width)
-        let newHeight = min(max(initialWindowFrame.height + deltaY, window.minSize.height), window.maxSize.height)
-        let newOriginY = initialWindowFrame.maxY - newHeight
-
-        let newFrame = NSRect(
-            x: initialWindowFrame.origin.x,
-            y: newOriginY,
-            width: newWidth,
-            height: newHeight
-        )
-        window.setFrame(newFrame, display: true)
+        while let nextEvent = window.nextEvent(
+            matching: [.leftMouseDragged, .leftMouseUp],
+            until: .distantFuture,
+            inMode: .eventTracking,
+            dequeue: true
+        ) {
+            switch nextEvent.type {
+            case .leftMouseDragged:
+                let current = NSEvent.mouseLocation
+                onDragResize?(edge, current.x - startMouse.x, startMouse.y - current.y)
+            case .leftMouseUp:
+                return
+            default:
+                break
+            }
+        }
     }
 }
 
@@ -163,10 +388,16 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     private let separatorView = NSView()
     private let scrollView = NSScrollView()
     private let textView = NSTextView()
-    private let resizeGrip = ResizeGripView()
+
+    private let resizeCorner = ResizeCornerView()
+    private let rightEdgeHit = ResizeEdgeHitView(edge: .right)
+    private let bottomEdgeHit = ResizeEdgeHitView(edge: .bottom)
+    private let leftEdgeHit = ResizeEdgeHitView(edge: .left)
+    private let bottomLeftHit = ResizeEdgeHitView(edge: .bottomLeft)
 
     private var currentColor: StickyColor = .yellow
     private var isDone: Bool = false
+    private var isSelected: Bool = false
     private var currentFontSize: Double = StickyNote.defaultFontSize
     private var isUpdatingProgrammatically = false
 
@@ -188,7 +419,7 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
 
         setupHeader()
         setupBody()
-        setupResizeGrip()
+        setupResizeHandles()
         setupLayout()
     }
 
@@ -215,6 +446,12 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         refreshAppearance()
     }
 
+    func setSelected(_ selected: Bool) {
+        guard isSelected != selected else { return }
+        isSelected = selected
+        refreshBorderAppearance()
+    }
+
     func focusBody() {
         window?.makeFirstResponder(textView)
     }
@@ -229,10 +466,16 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         dragHandleBar.wantsLayer = true
         dragHandleBar.toolTip = "Drag to move sticky"
         dragHandleBar.translatesAutoresizingMaskIntoConstraints = false
+        dragHandleBar.onBeginMove = { [weak self] in self?.delegate?.stickyViewDidBeginMove() }
+        dragHandleBar.onDragMove = { [weak self] dx, dy in self?.delegate?.stickyViewDidDragMove(deltaX: dx, deltaY: dy) }
+        dragHandleBar.onEndMove = { [weak self] in self?.delegate?.stickyViewDidEndMove() }
         addSubview(dragHandleBar)
 
         headerView.wantsLayer = true
         headerView.translatesAutoresizingMaskIntoConstraints = false
+        headerView.onBeginMove = { [weak self] in self?.delegate?.stickyViewDidBeginMove() }
+        headerView.onDragMove = { [weak self] dx, dy in self?.delegate?.stickyViewDidDragMove(deltaX: dx, deltaY: dy) }
+        headerView.onEndMove = { [weak self] in self?.delegate?.stickyViewDidEndMove() }
         addSubview(headerView)
 
         configureIconButton(
@@ -253,6 +496,9 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         titleField.placeholderString = "Title..."
         titleField.delegate = self
         titleField.translatesAutoresizingMaskIntoConstraints = false
+        titleField.onBeginMove = { [weak self] in self?.delegate?.stickyViewDidBeginMove() }
+        titleField.onDragMove = { [weak self] dx, dy in self?.delegate?.stickyViewDidDragMove(deltaX: dx, deltaY: dy) }
+        titleField.onEndMove = { [weak self] in self?.delegate?.stickyViewDidEndMove() }
 
         colorButton.isBordered = false
         colorButton.bezelStyle = .inline
@@ -323,12 +569,39 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         addSubview(scrollView)
     }
 
-    private func setupResizeGrip() {
-        resizeGrip.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(resizeGrip)
+    private func setupResizeHandles() {
+        for edgeView in [rightEdgeHit, bottomEdgeHit, leftEdgeHit, bottomLeftHit] {
+            edgeView.translatesAutoresizingMaskIntoConstraints = false
+            edgeView.onBeginResize = { [weak self] edge in
+                self?.delegate?.stickyViewDidBeginResize(edge: edge)
+            }
+            edgeView.onDragResize = { [weak self] edge, dx, dy in
+                self?.delegate?.stickyViewDidDragResize(edge: edge, deltaX: dx, deltaY: dy)
+            }
+            edgeView.onEndResize = { [weak self] in
+                self?.delegate?.stickyViewDidEndResize()
+            }
+            addSubview(edgeView)
+        }
+
+        resizeCorner.toolTip = "Drag to resize sticky"
+        resizeCorner.translatesAutoresizingMaskIntoConstraints = false
+        resizeCorner.onBeginResize = { [weak self] in
+            self?.delegate?.stickyViewDidBeginResize(edge: .bottomRight)
+        }
+        resizeCorner.onDragResize = { [weak self] dx, dy in
+            self?.delegate?.stickyViewDidDragResize(edge: .bottomRight, deltaX: dx, deltaY: dy)
+        }
+        resizeCorner.onEndResize = { [weak self] in
+            self?.delegate?.stickyViewDidEndResize()
+        }
+        addSubview(resizeCorner)
     }
 
     private func setupLayout() {
+        let edgeThickness: CGFloat = 8
+        let cornerSize: CGFloat = 24
+
         NSLayoutConstraint.activate([
             dragHandleBar.topAnchor.constraint(equalTo: topAnchor),
             dragHandleBar.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -374,10 +647,32 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            resizeGrip.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -1),
-            resizeGrip.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -1),
-            resizeGrip.widthAnchor.constraint(equalToConstant: 16),
-            resizeGrip.heightAnchor.constraint(equalToConstant: 16),
+            // Generous invisible resize hit zones along left, right, bottom edges
+            rightEdgeHit.topAnchor.constraint(equalTo: separatorView.bottomAnchor),
+            rightEdgeHit.trailingAnchor.constraint(equalTo: trailingAnchor),
+            rightEdgeHit.bottomAnchor.constraint(equalTo: resizeCorner.topAnchor),
+            rightEdgeHit.widthAnchor.constraint(equalToConstant: edgeThickness),
+
+            leftEdgeHit.topAnchor.constraint(equalTo: separatorView.bottomAnchor),
+            leftEdgeHit.leadingAnchor.constraint(equalTo: leadingAnchor),
+            leftEdgeHit.bottomAnchor.constraint(equalTo: bottomLeftHit.topAnchor),
+            leftEdgeHit.widthAnchor.constraint(equalToConstant: edgeThickness),
+
+            bottomEdgeHit.leadingAnchor.constraint(equalTo: bottomLeftHit.trailingAnchor),
+            bottomEdgeHit.trailingAnchor.constraint(equalTo: resizeCorner.leadingAnchor),
+            bottomEdgeHit.bottomAnchor.constraint(equalTo: bottomAnchor),
+            bottomEdgeHit.heightAnchor.constraint(equalToConstant: edgeThickness),
+
+            bottomLeftHit.leadingAnchor.constraint(equalTo: leadingAnchor),
+            bottomLeftHit.bottomAnchor.constraint(equalTo: bottomAnchor),
+            bottomLeftHit.widthAnchor.constraint(equalToConstant: 16),
+            bottomLeftHit.heightAnchor.constraint(equalToConstant: 16),
+
+            // Prominent bottom-right resize corner
+            resizeCorner.trailingAnchor.constraint(equalTo: trailingAnchor),
+            resizeCorner.bottomAnchor.constraint(equalTo: bottomAnchor),
+            resizeCorner.widthAnchor.constraint(equalToConstant: cornerSize),
+            resizeCorner.heightAnchor.constraint(equalToConstant: cornerSize),
         ])
     }
 
@@ -385,9 +680,8 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
 
     private func refreshAppearance() {
         layer?.backgroundColor = currentColor.bodyColor.cgColor
-        layer?.borderColor = currentColor.borderColor.cgColor
         dragHandleBar.layer?.backgroundColor = currentColor.headerColor.cgColor
-        dragHandleBar.pillColor = currentColor.borderColor.withAlphaComponent(0.55)
+        dragHandleBar.pillColor = currentColor.borderColor.withAlphaComponent(0.60)
         headerView.layer?.backgroundColor = currentColor.headerColor.cgColor
         separatorView.layer?.backgroundColor = currentColor.borderColor.withAlphaComponent(0.35).cgColor
 
@@ -406,12 +700,25 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         addButton.contentTintColor = iconTint
         deleteButton.contentTintColor = iconTint
         colorButton.image = makeColorDotImage(color: currentColor.swatchColor, size: 12)
-        resizeGrip.lineColor = currentColor.borderColor.withAlphaComponent(0.55)
+
+        resizeCorner.gripColor = currentColor.borderColor.blended(withFraction: 0.35, of: .black) ?? currentColor.borderColor
+        resizeCorner.badgeColor = currentColor.borderColor
 
         window?.alphaValue = isDone ? 0.80 : 1.0
 
+        refreshBorderAppearance()
         applyTitleStyling(inkColor: inkColor)
         applyBodyStyling(inkColor: inkColor)
+    }
+
+    private func refreshBorderAppearance() {
+        if isSelected {
+            layer?.borderColor = NSColor.controlAccentColor.cgColor
+            layer?.borderWidth = 2.5
+        } else {
+            layer?.borderColor = currentColor.borderColor.cgColor
+            layer?.borderWidth = 1.0
+        }
     }
 
     private func applyTitleStyling(inkColor: NSColor) {
@@ -430,7 +737,6 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
             attrs[.strikethroughColor] = inkColor
         }
-        // Only apply attributed string when not actively editing the field to avoid jumping the cursor
         if window?.firstResponder != titleField.currentEditor() {
             titleField.attributedStringValue = NSAttributedString(string: titleText, attributes: attrs)
         } else {
