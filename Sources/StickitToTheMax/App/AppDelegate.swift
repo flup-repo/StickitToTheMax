@@ -3,9 +3,10 @@ import Carbon.HIToolbox
 import ServiceManagement
 import UniformTypeIdentifiers
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, StickyWindowControllerDelegate, DrawingCanvasOverlayDelegate, DrawingToolbarDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, StickyWindowControllerDelegate, DrawingCanvasOverlayDelegate, DrawingToolbarDelegate, UpdateManagerDelegate {
     private let store: StickyStore
     private let drawingStore: DrawingStore
+    private let updateManager: UpdateManager
     private var statusItem: NSStatusItem?
     private var controllers: [UUID: StickyWindowController] = [:]
     private var notes: [StickyNote] = []
@@ -30,12 +31,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
     override init() {
         self.store = StickyStore()
         self.drawingStore = DrawingStore()
+        self.updateManager = UpdateManager()
         super.init()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         drawingCanvas.delegate = self
         drawingToolbar.toolbarDelegate = self
+        updateManager.delegate = self
 
         setupEditMenu()
         setupStatusItem()
@@ -45,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
         observeScreenChanges()
         installDesktopMarqueeMonitor()
         registerDrawingHotKey()
+        updateManager.startIfAutoCheckEnabled()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -97,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
         let menu = NSMenu()
         menu.delegate = self
 
-        let header = NSMenuItem(title: "StickitToTheMax", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: "StickitToTheMax v\(updateManager.currentVersionString)", action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
         menu.addItem(.separator())
@@ -201,6 +205,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
         launchAtLoginItem.target = self
         launchAtLoginItem.state = (loginStatus == .enabled) ? .on : .off
         menu.addItem(launchAtLoginItem)
+
+        menu.addItem(.separator())
+
+        let checkUpdatesTitle: String
+        switch updateManager.status {
+        case .idle:
+            checkUpdatesTitle = "Check for Updates…"
+        case .checking:
+            checkUpdatesTitle = "Checking for Updates…"
+        case .downloading(let version):
+            checkUpdatesTitle = "Downloading v\(version)…"
+        case .installing(let version):
+            checkUpdatesTitle = "Installing v\(version)…"
+        }
+        let checkUpdatesItem = NSMenuItem(
+            title: checkUpdatesTitle,
+            action: #selector(handleCheckForUpdates),
+            keyEquivalent: ""
+        )
+        checkUpdatesItem.target = self
+        checkUpdatesItem.isEnabled = !updateManager.isBusy
+        menu.addItem(checkUpdatesItem)
+
+        let autoCheckItem = NSMenuItem(
+            title: "Automatically Check for Updates",
+            action: #selector(handleToggleAutoCheckForUpdates),
+            keyEquivalent: ""
+        )
+        autoCheckItem.target = self
+        autoCheckItem.state = updateManager.isAutoCheckEnabled ? .on : .off
+        menu.addItem(autoCheckItem)
 
         menu.addItem(.separator())
 
@@ -731,8 +766,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
         rebuildStatusMenu()
     }
 
+    @objc private func handleCheckForUpdates() {
+        updateManager.checkForUpdates(userInitiated: true)
+    }
+
+    @objc private func handleToggleAutoCheckForUpdates() {
+        updateManager.isAutoCheckEnabled.toggle()
+        rebuildStatusMenu()
+    }
+
     @objc private func handleQuit() {
         store.saveImmediately(notes)
+        drawingStore.saveImmediately(drawingCanvas.strokes)
         NSApp.terminate(nil)
     }
 
@@ -956,5 +1001,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
 
     func drawingToolbarDidRequestDone() {
         setDrawingMode(false)
+    }
+
+    // MARK: - UpdateManagerDelegate
+
+    func updateManagerDidChangeStatus(_ status: UpdateStatus) {
+        rebuildStatusMenu()
+    }
+
+    func updateManagerWillRelaunchForUpdate() {
+        store.saveImmediately(notes)
+        drawingStore.saveImmediately(drawingCanvas.strokes)
     }
 }
