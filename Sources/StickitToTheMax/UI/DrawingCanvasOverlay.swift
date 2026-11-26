@@ -58,6 +58,13 @@ final class DrawingCanvasOverlay {
         !undoStack.isEmpty
     }
 
+    var displayTransform: CanvasTransform = .identity {
+        didSet {
+            guard displayTransform != oldValue else { return }
+            canvasView.displayTransform = displayTransform
+        }
+    }
+
     init() {
         let unionFrame = Self.allScreensUnionFrame()
         window = DrawingCanvasWindow(contentRect: unionFrame)
@@ -150,8 +157,10 @@ final class DrawingCanvasOverlay {
         if recordUndo {
             didSnapshotCurrentEraseGesture = false
         }
+        let canonicalPoint = displayTransform.invert(screenPoint)
+        let canonicalRadius = radius / displayTransform.scale
         let matchingIndices = strokes.indices.filter {
-            strokes[$0].intersects(point: screenPoint, radius: radius)
+            strokes[$0].intersects(point: canonicalPoint, radius: canonicalRadius)
         }
         guard !matchingIndices.isEmpty else { return false }
 
@@ -291,6 +300,9 @@ private final class DrawingCanvasView: NSView {
     var strokes: [DrawingStroke] = [] {
         didSet { needsDisplay = true }
     }
+    var displayTransform: CanvasTransform = .identity {
+        didSet { needsDisplay = true }
+    }
     var isDrawingMode: Bool = false {
         didSet { needsDisplay = true }
     }
@@ -322,10 +334,12 @@ private final class DrawingCanvasView: NSView {
 
         switch tool {
         case .pen:
+            let canonicalPoint = displayTransform.invert(screenPoint)
+            let canonicalWidth = DrawingStroke.clampedLineWidth(lineWidth / Double(displayTransform.scale))
             activeStroke = DrawingStroke(
-                points: [DrawingPoint(point: screenPoint)],
+                points: [DrawingPoint(point: canonicalPoint)],
                 color: penColor,
-                lineWidth: lineWidth
+                lineWidth: canonicalWidth
             )
             needsDisplay = true
 
@@ -346,12 +360,14 @@ private final class DrawingCanvasView: NSView {
         switch tool {
         case .pen:
             guard var current = activeStroke else { return }
+            let canonicalPoint = displayTransform.invert(screenPoint)
             if let last = current.points.last {
-                let dx = screenPoint.x - CGFloat(last.x)
-                let dy = screenPoint.y - CGFloat(last.y)
+                let lastScreen = displayTransform.apply(to: last.nsPoint)
+                let dx = screenPoint.x - lastScreen.x
+                let dy = screenPoint.y - lastScreen.y
                 guard (dx * dx + dy * dy) >= 2.25 else { return }
             }
-            current.points.append(DrawingPoint(point: screenPoint))
+            current.points.append(DrawingPoint(point: canonicalPoint))
             activeStroke = current
             needsDisplay = true
 
@@ -411,11 +427,11 @@ private final class DrawingCanvasView: NSView {
     private func drawStroke(_ stroke: DrawingStroke, windowOrigin: NSPoint) {
         guard !stroke.points.isEmpty else { return }
         let color = stroke.color.nsColor
-        let width = CGFloat(stroke.lineWidth)
+        let width = displayTransform.applyLineWidth(stroke.lineWidth)
 
         if stroke.points.count == 1 {
-            let p = stroke.points[0]
-            let local = NSPoint(x: CGFloat(p.x) - windowOrigin.x, y: CGFloat(p.y) - windowOrigin.y)
+            let screenPt = displayTransform.apply(to: stroke.points[0].nsPoint)
+            let local = NSPoint(x: screenPt.x - windowOrigin.x, y: screenPt.y - windowOrigin.y)
             let dotRect = NSRect(x: local.x - width / 2, y: local.y - width / 2, width: width, height: width)
             color.setFill()
             NSBezierPath(ovalIn: dotRect).fill()
@@ -427,8 +443,9 @@ private final class DrawingCanvasView: NSView {
         path.lineCapStyle = .round
         path.lineJoinStyle = .round
 
-        let localPoints = stroke.points.map {
-            NSPoint(x: CGFloat($0.x) - windowOrigin.x, y: CGFloat($0.y) - windowOrigin.y)
+        let localPoints = stroke.points.map { pt -> NSPoint in
+            let screenPt = displayTransform.apply(to: pt.nsPoint)
+            return NSPoint(x: screenPt.x - windowOrigin.x, y: screenPt.y - windowOrigin.y)
         }
 
         path.move(to: localPoints[0])

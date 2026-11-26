@@ -413,15 +413,18 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     private var isImageSticky: Bool = false
     private var isSelected: Bool = false
     private var currentFontSize: Double = StickyNote.defaultFontSize
+    private var displayScale: CGFloat = 1.0
     private var isUpdatingProgrammatically = false
 
     private var bodyFont: NSFont {
-        NSFont.systemFont(ofSize: CGFloat(currentFontSize), weight: .regular)
+        let scaled = max(9.5, CGFloat(currentFontSize) * displayScale)
+        return NSFont.systemFont(ofSize: scaled, weight: .regular)
     }
 
     private var titleFont: NSFont {
-        let scaled = min(max(currentFontSize * 0.93, 12.0), 18.0)
-        return NSFont.systemFont(ofSize: CGFloat(scaled), weight: .semibold)
+        let base = min(max(currentFontSize * 0.93, 12.0), 18.0)
+        let scaled = max(10.0, CGFloat(base) * displayScale)
+        return NSFont.systemFont(ofSize: scaled, weight: .semibold)
     }
 
     override init(frame frameRect: NSRect) {
@@ -469,6 +472,13 @@ final class StickyContentView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
 
     func setImage(_ image: NSImage?) {
         imageView.image = image
+    }
+
+    func setDisplayScale(_ scale: CGFloat) {
+        let clamped = min(max(scale, 0.5), 1.0)
+        guard abs(displayScale - clamped) > 0.01 else { return }
+        displayScale = clamped
+        refreshAppearance()
     }
 
     func setSelected(_ selected: Bool) {
