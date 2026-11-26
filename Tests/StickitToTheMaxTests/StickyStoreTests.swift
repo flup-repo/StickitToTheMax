@@ -286,4 +286,48 @@ final class StickyStoreTests: XCTestCase {
         XCTAssertEqual(roundTripped.x, 1330, accuracy: 0.5)
         XCTAssertEqual(roundTripped.y, 900, accuracy: 0.5)
     }
+
+    func testSemanticVersionParsingAndComparison() {
+        let v100 = SemanticVersion(string: "v1.0.0")
+        let v101 = SemanticVersion(string: "1.0.1")
+        let v120 = SemanticVersion(string: "v1.2.0")
+        let v1100 = SemanticVersion(string: "v1.10.0")
+        let v200 = SemanticVersion(string: "2.0")
+
+        XCTAssertNotNil(v100)
+        XCTAssertEqual(v100, SemanticVersion(major: 1, minor: 0, patch: 0))
+        XCTAssertLessThan(v100!, v101!)
+        XCTAssertLessThan(v101!, v120!)
+        XCTAssertLessThan(v120!, v1100!)
+        XCTAssertLessThan(v1100!, v200!)
+        XCTAssertNil(SemanticVersion(string: "invalid"))
+    }
+
+    func testGitHubReleaseDecodesDMGAsset() throws {
+        let json = """
+        {
+          "tag_name": "v1.1.0",
+          "name": "StickitToTheMax v1.1.0",
+          "html_url": "https://github.com/flup-repo/StickitToTheMax/releases/tag/v1.1.0",
+          "draft": false,
+          "prerelease": false,
+          "assets": [
+            {
+              "name": "checksums.txt",
+              "browser_download_url": "https://example.com/checksums.txt",
+              "size": 128
+            },
+            {
+              "name": "StickitToTheMax-1.1.0.dmg",
+              "browser_download_url": "https://example.com/StickitToTheMax-1.1.0.dmg",
+              "size": 405000
+            }
+          ]
+        }
+        """
+        let release = try JSONDecoder().decode(GitHubRelease.self, from: Data(json.utf8))
+        XCTAssertEqual(release.version, SemanticVersion(major: 1, minor: 1, patch: 0))
+        XCTAssertEqual(release.dmgAsset?.name, "StickitToTheMax-1.1.0.dmg")
+        XCTAssertEqual(release.dmgAsset?.browserDownloadURL.absoluteString, "https://example.com/StickitToTheMax-1.1.0.dmg")
+    }
 }
