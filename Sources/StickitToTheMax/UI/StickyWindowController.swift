@@ -104,6 +104,7 @@ protocol StickyWindowControllerDelegate: AnyObject {
 final class StickyWindowController: NSWindowController, NSWindowDelegate, StickyContentViewDelegate {
     private(set) var note: StickyNote
     let imageAspectRatio: CGFloat?
+    private(set) var displayTransform: CanvasTransform = .identity
     weak var delegate: StickyWindowControllerDelegate?
 
     private let stickyContentView: StickyContentView
@@ -179,6 +180,18 @@ final class StickyWindowController: NSWindowController, NSWindowDelegate, Sticky
         stickyContentView.apply(note: note)
     }
 
+    func applyDisplayTransform(_ transform: CanvasTransform) {
+        displayTransform = transform
+        let scaledMin = NSSize(
+            width: max(120, StickyNote.minSize.width * transform.scale),
+            height: max(90, StickyNote.minSize.height * transform.scale)
+        )
+        window?.minSize = scaledMin
+        let displayRect = transform.apply(to: note.frame.nsRect)
+        setFrameProgrammatically(displayRect)
+        stickyContentView.setDisplayScale(transform.scale)
+    }
+
     func setFrameProgrammatically(_ rect: NSRect) {
         isProgrammaticFrameChange = true
         window?.setFrame(rect, display: true)
@@ -187,7 +200,8 @@ final class StickyWindowController: NSWindowController, NSWindowDelegate, Sticky
 
     func commitCurrentFrameToModel() -> StickyNote {
         if let frame = window?.frame {
-            let updatedFrame = StickyFrame(rect: frame)
+            let canonicalRect = displayTransform.invert(frame)
+            let updatedFrame = StickyFrame(rect: canonicalRect)
             if updatedFrame != note.frame {
                 note.frame = updatedFrame
                 note.updatedAt = Date()
@@ -197,25 +211,11 @@ final class StickyWindowController: NSWindowController, NSWindowDelegate, Sticky
     }
 
     // MARK: - NSWindowDelegate
-
-    func windowDidMove(_ notification: Notification) {
-        guard !isProgrammaticFrameChange else { return }
-        syncFrameFromWindow()
-    }
-
-    func windowDidResize(_ notification: Notification) {
-        guard !isProgrammaticFrameChange else { return }
-        syncFrameFromWindow()
-    }
-
-    private func syncFrameFromWindow() {
-        guard let frame = window?.frame else { return }
-        let updatedFrame = StickyFrame(rect: frame)
-        guard updatedFrame != note.frame else { return }
-        note.frame = updatedFrame
-        note.updatedAt = Date()
-        delegate?.stickyControllerDidUpdate(note)
-    }
+    // Note: All user-initiated moves and resizes go through StickyContentView's explicit
+    // drag/resize loops and commit via `commitCurrentFrameToModel()`. We intentionally do NOT
+    // overwrite `note.frame` on system-initiated `windowDidMove`/`windowDidResize` callbacks
+    // (such as macOS repositioning windows during a monitor switch), which would otherwise
+    // desynchronize stickies from wallpaper drawings and corrupt the saved layout.
 
     // MARK: - StickyContentViewDelegate
 

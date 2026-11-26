@@ -218,4 +218,72 @@ final class StickyStoreTests: XCTestCase {
         XCTAssertEqual(resized.height, 200 + chrome, accuracy: 0.5)
         XCTAssertEqual(resized.maxY, initial.maxY, accuracy: 0.5)
     }
+
+    func testCanvasTransformPreservesOrderAndDrawingAlignmentAcrossMonitors() {
+        let externalScreen = NSRect(x: 0, y: 0, width: 3440, height: 1410)
+        let macbookScreen = NSRect(x: 0, y: 0, width: 1800, height: 1130)
+
+        let leftSticky = StickyNote(
+            title: "Personal",
+            frame: StickyFrame(x: 1200, y: 900, width: 260, height: 180)
+        )
+        let rightSticky = StickyNote(
+            title: "Work",
+            frame: StickyFrame(x: 2900, y: 900, width: 260, height: 180)
+        )
+        let bottomSticky = StickyNote(
+            title: "Picture",
+            frame: StickyFrame(x: 1200, y: 300, width: 320, height: 220)
+        )
+        // Arrow connecting bottom of leftSticky (1330, 900) to top of bottomSticky (1330, 520)
+        let arrow = DrawingStroke(
+            points: [DrawingPoint(x: 1330, y: 900), DrawingPoint(x: 1330, y: 520)],
+            color: .yellow,
+            lineWidth: 4.0
+        )
+
+        // On external monitor, everything fits -> identity transform
+        let externalTransform = CanvasTransform.fit(
+            notes: [leftSticky, rightSticky, bottomSticky],
+            strokes: [arrow],
+            visibleScreenFrames: [externalScreen],
+            fallbackVisibleFrame: externalScreen
+        )
+        XCTAssertTrue(externalTransform.isIdentity)
+
+        // Switching to MacBook -> fits uniformly inside 1800x1130
+        let macbookTransform = CanvasTransform.fit(
+            notes: [leftSticky, rightSticky, bottomSticky],
+            strokes: [arrow],
+            visibleScreenFrames: [macbookScreen],
+            fallbackVisibleFrame: macbookScreen
+        )
+        XCTAssertLessThan(macbookTransform.scale, 1.0)
+
+        let dispLeft = macbookTransform.apply(to: leftSticky.frame.nsRect)
+        let dispRight = macbookTransform.apply(to: rightSticky.frame.nsRect)
+        let dispBottom = macbookTransform.apply(to: bottomSticky.frame.nsRect)
+        let dispArrowStart = macbookTransform.apply(to: arrow.points[0].nsPoint)
+        let dispArrowEnd = macbookTransform.apply(to: arrow.points[1].nsPoint)
+
+        // Relative order preserved
+        XCTAssertLessThan(dispLeft.maxX, dispRight.minX)
+        XCTAssertGreaterThan(dispLeft.minY, dispBottom.maxY)
+
+        // Everything stays inside MacBook visible frame
+        XCTAssertTrue(macbookScreen.contains(dispLeft))
+        XCTAssertTrue(macbookScreen.contains(dispRight))
+        XCTAssertTrue(macbookScreen.contains(dispBottom))
+        XCTAssertTrue(macbookScreen.contains(dispArrowStart))
+        XCTAssertTrue(macbookScreen.contains(dispArrowEnd))
+
+        // Arrow remains aligned horizontally with leftSticky's center
+        XCTAssertEqual(dispArrowStart.x, dispLeft.midX, accuracy: 1.5)
+        XCTAssertEqual(dispArrowEnd.x, dispLeft.midX, accuracy: 1.5)
+
+        // Inverse transform round-trips cleanly back to canonical coordinates
+        let roundTripped = macbookTransform.invert(dispArrowStart)
+        XCTAssertEqual(roundTripped.x, 1330, accuracy: 0.5)
+        XCTAssertEqual(roundTripped.y, 900, accuracy: 0.5)
+    }
 }

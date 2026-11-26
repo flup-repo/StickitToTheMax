@@ -11,9 +11,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
     private var notes: [StickyNote] = []
     private var stickiesVisible = true
 
-    // Wallpaper drawing state
+    // Wallpaper drawing & multi-monitor layout state
     private let drawingCanvas = DrawingCanvasOverlay()
     private let drawingToolbar = DrawingToolbarWindow()
+    private var displayTransform: CanvasTransform = .identity
     private var drawHotKeyRef: EventHotKeyRef?
     private var hotKeyHandlerRef: EventHandlerRef?
 
@@ -40,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
         setupStatusItem()
         loadInitialNotes()
         loadInitialDrawings()
+        refreshDisplayTransform()
         observeScreenChanges()
         installDesktopMarqueeMonitor()
         registerDrawingHotKey()
@@ -399,6 +401,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
         let controller = StickyWindowController(note: note, image: image)
         controller.delegate = self
         controllers[note.id] = controller
+        controller.applyDisplayTransform(displayTransform)
         if stickiesVisible {
             controller.showOnDesktop(focus: focus)
         }
@@ -424,7 +427,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
         origin.x = min(max(origin.x, screenFrame.minX + 16), screenFrame.maxX - width - 16)
         origin.y = min(max(origin.y, screenFrame.minY + 16), screenFrame.maxY - height - 16)
 
-        return StickyFrame(rect: NSRect(origin: origin, size: NSSize(width: width, height: height)))
+        let displayRect = NSRect(origin: origin, size: NSSize(width: width, height: height))
+        let canonicalRect = displayTransform.invert(displayRect)
+        return StickyFrame(rect: canonicalRect)
     }
 
     private func createSticky(title: String, color: StickyColor, near reference: StickyNote? = nil) {
@@ -450,12 +455,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
         origin.x = min(max(origin.x, screenFrame.minX + 16), screenFrame.maxX - size.width - 16)
         origin.y = min(max(origin.y, screenFrame.minY + 16), screenFrame.maxY - size.height - 16)
 
+        let displayRect = NSRect(origin: origin, size: size)
+        let canonicalRect = displayTransform.invert(displayRect)
         let note = StickyNote(
             title: title,
             body: "",
             color: .yellow,
             imageFilename: filename,
-            frame: StickyFrame(rect: NSRect(origin: origin, size: size))
+            frame: StickyFrame(rect: canonicalRect)
         )
         notes.append(note)
         stickiesVisible = true
@@ -491,27 +498,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
     }
 
     @objc private func handleScreenParametersChanged() {
+        refreshDisplayTransform()
+        // macOS WindowServer sometimes finishes repositioning windows slightly after
+        // didChangeScreenParametersNotification fires; re-apply once more to lock alignment.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.refreshDisplayTransform()
+        }
+    }
+
+    /// Maps the canonical layout (stickies + drawings together) uniformly onto the current
+    /// monitor setup without destructively overwriting saved positions. Switching back to a
+    /// larger monitor restores the exact original layout.
+    private func refreshDisplayTransform() {
         let screens = NSScreen.screens
         guard let fallback = NSScreen.main ?? screens.first else { return }
+        let visibleFrames = screens.map(\.visibleFrame)
 
-        var changed = false
-        for index in notes.indices {
-            let rect = notes[index].frame.nsRect
-            let isOnAnyScreen = screens.contains { $0.visibleFrame.intersects(rect) }
-            if !isOnAnyScreen {
-                let target = fallback.visibleFrame
-                let clampedX = min(max(rect.origin.x, target.minX + 20), target.maxX - rect.width - 20)
-                let clampedY = min(max(rect.origin.y, target.minY + 20), target.maxY - rect.height - 20)
-                let newRect = NSRect(x: clampedX, y: clampedY, width: rect.width, height: rect.height)
-                notes[index].frame = StickyFrame(rect: newRect)
-                controllers[notes[index].id]?.setFrameProgrammatically(newRect)
-                changed = true
-            }
-        }
-        if changed {
-            store.scheduleSave(notes)
-        }
+        let nextTransform = CanvasTransform.fit(
+            notes: notes,
+            strokes: drawingCanvas.strokes,
+            visibleScreenFrames: visibleFrames,
+            fallbackVisibleFrame: fallback.visibleFrame
+        )
+        displayTransform = nextTransform
+
         drawingCanvas.syncFrameToScreens()
+        drawingCanvas.displayTransform = nextTransform
+        for controller in controllers.values {
+            controller.applyDisplayTransform(nextTransform)
+        }
     }
 
     // MARK: - Menu Actions
@@ -818,15 +833,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Sticky
     func stickyControllerDidDragResize(edge: StickyResizeEdge, deltaX: CGFloat, deltaY: CGFloat) {
         let isSingle = activeGroupFrames.count == 1
         for (id, startFrame) in activeGroupFrames {
-            let aspectRatio = isSingle ? controllers[id]?.imageAspectRatio : nil
+            let controller = controllers[id]
+            let aspectRatio = isSingle ? controller?.imageAspectRatio : nil
+            let minSize = controller?.window?.minSize ?? StickyNote.minSize
             let resized = StickyGeometry.resizedRect(
                 from: startFrame,
                 edge: edge,
                 deltaX: deltaX,
                 deltaY: deltaY,
+                minSize: minSize,
                 imageAspectRatio: aspectRatio
             )
-            controllers[id]?.setFrameProgrammatically(resized)
+            controller?.setFrameProgrammatically(resized)
         }
     }
 
