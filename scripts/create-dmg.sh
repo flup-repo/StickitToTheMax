@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="StickitToTheMax"
-APP_VERSION="${APP_VERSION:-1.0.0}"
+APP_VERSION="${APP_VERSION:-1.0.1}"
 BUNDLE_DIR="${ROOT_DIR}/build/${APP_NAME}.app"
 DMG_PATH="${ROOT_DIR}/build/${APP_NAME}-${APP_VERSION}.dmg"
 STAGE_DIR="$(mktemp -d)"
